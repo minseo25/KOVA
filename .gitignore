@@ -1,0 +1,4 @@
+.venv
+.env
+.mypy_cache
+models/*
