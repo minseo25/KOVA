@@ -3,7 +3,10 @@ import wave
 import tkinter as tk
 from threading import Thread
 from faster_whisper import WhisperModel
+import os
 
+# for windows (if you have duplicate dll initialization error)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # 녹음 파라미터 설정
 FORMAT = pyaudio.paInt16  # 16-bit resolution
@@ -49,7 +52,7 @@ def record_audio():
     wf.setframerate(RATE)
     wf.writeframes(b''.join(frames))
     wf.close()
-    segments, info = model.transcribe(OUTPUT_FILENAME, beam_size=5)
+    segments, info = model.transcribe(OUTPUT_FILENAME, beam_size=5, language='ko')
     for segment in segments:
         print(f'[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}')
 

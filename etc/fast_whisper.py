@@ -7,7 +7,7 @@ model = WhisperModel('../models/faster-whisper-small', device='cpu', compute_typ
 
 # check elapsed time for transcribing in ms
 dt = datetime.datetime.now().microsecond
-segments, info = model.transcribe('output.wav', beam_size=5)
+segments, info = model.transcribe('output.wav', beam_size=5, language='ko')
 dt2 = datetime.datetime.now().microsecond
 print('Elapsed time: %d ms' % ((dt2 - dt)/1000))
 

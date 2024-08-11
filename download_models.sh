@@ -2,8 +2,8 @@
 
 mkdir -p models
 
-echo "Running download_models.py..."
-python etc/download_models.py
+echo "Downloading gemma-2-2b-it..."
+huggingface-cli download google/gemma-2-2b-it --local-dir="models/gemma-2-2b-it"
 
 echo "Downloading llama-3-Korean-Bllossom-8B-Q4_K_M..."
 huggingface-cli download MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M --local-dir="models/llama-3-korean-bllossom-8b-gguf"

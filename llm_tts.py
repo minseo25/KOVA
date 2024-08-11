@@ -19,6 +19,9 @@ import wave
 import time
 from faster_whisper import WhisperModel
 
+# for windows (if you have duplicate dll initialization error)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # load environment variables
 load_dotenv()
 
@@ -195,7 +198,7 @@ def ask_llm():
         is_recording = False
         time.sleep(0.1)  # wait for recording to stop
 
-    segments, info = whisper.transcribe('tmp.wav', beam_size=5)
+    segments, info = whisper.transcribe('tmp.wav', beam_size=5, language='ko')
     user_input = ''
     for segment in segments:
         user_input += segment.text
