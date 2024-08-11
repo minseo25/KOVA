@@ -20,7 +20,7 @@ import time
 from faster_whisper import WhisperModel
 
 # for windows (if you have duplicate dll initialization error)
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # load environment variables
 load_dotenv()

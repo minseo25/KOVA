@@ -6,7 +6,7 @@ from faster_whisper import WhisperModel
 import os
 
 # for windows (if you have duplicate dll initialization error)
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # 녹음 파라미터 설정
 FORMAT = pyaudio.paInt16  # 16-bit resolution
