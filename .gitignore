@@ -2,3 +2,4 @@
 .env
 .mypy_cache
 models/*
+*.wav

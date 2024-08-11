@@ -24,6 +24,7 @@ source ~/.zshrc
 ```
 python3.12 -m venv .venv
 source .venv/bin/activate
+brew install portaudio
 pip install -r requirements-mac.txt
 ```
 mac
@@ -35,12 +36,12 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ```
 windows
 
-### STEP 2-2. download pretrained model (if needed)
+### STEP 2-2. download pretrained model
 ```shell
 chmod +x download_models.sh
 ./download_models.sh
 ```
-download model from hugging-face
+download model from hugging-face (gemma-2-2b, llama-3-int4, qwen2-7b-gguf, faster-whisper)
 
 
 ### STEP 3. run LLM - TTS

@@ -1,4 +1,3 @@
-# for LLM
 import os
 import threading
 import tkinter as tk
@@ -14,6 +13,11 @@ from groq import Groq
 from llama_cpp import Llama
 from transformers import AutoModelForCausalLM
 from transformers import AutoTokenizer
+
+import pyaudio
+import wave
+import time
+from faster_whisper import WhisperModel
 
 # load environment variables
 load_dotenv()
@@ -39,6 +43,28 @@ models = {
 
 device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
+# recording parameters
+frames: list = []
+is_recording = True
+FORMAT = pyaudio.paInt16  # 16-bit resolution
+CHANNELS = 1              # mono
+RATE = 44100              # 44.1kHz sampline rate
+CHUNK = 2048              # buffer size
+OUTPUT_FILENAME = 'tmp.wav'
+
+# initialize PyAudio and open stream
+audio = pyaudio.PyAudio()
+stream = audio.open(
+    format=FORMAT, channels=CHANNELS,
+    rate=RATE, input=True,
+    frames_per_buffer=CHUNK,
+    input_device_index=None,
+)
+
+# fast whisper model
+whisper = WhisperModel('models/faster-whisper-small', device='cpu', compute_type='int8')
+
+
 # initialize GROQ client
 # you can try gemma2, llama3.1, lamma3, mixtral, etc.
 client = Groq(api_key=os.getenv('GROQ_API_KEY'))
@@ -50,19 +76,22 @@ model_name = ''
 
 # thread class for handling model queries and TTS
 class LLM2TTSThread(threading.Thread):
-    def __init__(self, user_input, model_name, CHUNK_SIZE=1024):
+    def __init__(self, user_input, model_name, chunk_size=1024):
         threading.Thread.__init__(self)
         self.user_input = user_input
         self.model_name = model_name
         self._stop_event = threading.Event()
         self.stream = None
-        self.chunk_size = CHUNK_SIZE
+        self.chunk_size = chunk_size
 
     def run(self):
         try:
             response = self._run_model_query()
+            print('Response:', response)
             if self._stop_event.is_set():
                 return
+            if not response:
+                response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
             self._play_tts_response(response)
         except Exception as e:
             print(f"Exception in thread: {e}")
@@ -160,9 +189,17 @@ class LLM2TTSThread(threading.Thread):
             self.stream.write(data[i:i+self.chunk_size])
 
 
-def ask_llm(text_box):
-    user_input = text_box.get('1.0', tk.END)
-    text_box.delete('1.0', tk.END)
+def ask_llm():
+    global is_recording
+    if is_recording:
+        is_recording = False
+        time.sleep(0.1)  # wait for recording to stop
+
+    segments, info = whisper.transcribe('tmp.wav', beam_size=5)
+    user_input = ''
+    for segment in segments:
+        user_input += segment.text
+    print(f"User input: {user_input}")
 
     if not user_input.strip() or model_name not in (
         'gemma-2-2b-it',
@@ -183,6 +220,31 @@ def model_selected(msg, name):
     global model_name
     msg.set(f"Ask to {name}!")
     model_name = name
+
+
+def record_audio():
+    global is_recording
+
+    print('Recording started...')
+    is_recording = True
+    frames.clear()
+
+    while is_recording:
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        frames.append(data)
+    print('Recording stopped.')
+
+    wf = wave.open(OUTPUT_FILENAME, 'wb')
+    wf.setnchannels(CHANNELS)
+    wf.setsampwidth(audio.get_sample_size(FORMAT))
+    wf.setframerate(RATE)
+    wf.writeframes(b''.join(frames))
+    wf.close()
+
+
+def stop_recording():
+    global is_recording
+    is_recording = False
 
 
 def main():
@@ -210,10 +272,15 @@ def main():
 
     label = tk.Label(root, textvariable=msg)
     label.grid(row=1, column=0, columnspan=3, pady=10)
-    text_box = tk.Text(root, height=10, width=50)
-    text_box.grid(row=2, column=0, columnspan=3, padx=10, pady=10)
-    ask_button = tk.Button(root, text='Ask', command=lambda: ask_llm(text_box))
-    ask_button.grid(row=3, column=0, columnspan=3, padx=10, pady=10)
+    record_start = tk.Button(
+        root, text='start recording',
+        command=lambda: threading.Thread(target=record_audio).start(),
+    )
+    record_stop = tk.Button(root, text='stop recording', command=stop_recording)
+    record_start.grid(row=2, column=1, pady=10)
+    record_stop.grid(row=3, column=1, pady=10)
+    ask_button = tk.Button(root, text='Ask', command=ask_llm)
+    ask_button.grid(row=4, column=0, columnspan=3, padx=10, pady=10)
 
     root.mainloop()
 

@@ -11,4 +11,7 @@ huggingface-cli download MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M --loca
 echo "Downloading qwen2-7b-instruct-q5_k_m.gguf..."
 huggingface-cli download Qwen/Qwen2-7B-Instruct-GGUF qwen2-7b-instruct-q5_k_m.gguf --local-dir="models/qwen2-7b-instruct-gguf" --local-dir-use-symlinks False
 
+echo "Downloading faster-whisper-large-v3..."
+huggingface-cli download Systran/faster-whisper-small --local-dir="models/faster-whisper-small"
+
 echo "Downloads completed."
