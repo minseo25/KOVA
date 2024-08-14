@@ -16,8 +16,9 @@ from transformers import AutoTokenizer
 
 import pyaudio
 import wave
-import time
 from faster_whisper import WhisperModel
+from pyannote.audio import Model
+from pyannote.audio.pipelines import VoiceActivityDetection
 
 # for windows (if you have duplicate dll initialization error)
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
@@ -48,12 +49,12 @@ device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is
 
 # recording parameters
 frames: list = []
-is_recording = True
 FORMAT = pyaudio.paInt16  # 16-bit resolution
 CHANNELS = 1              # mono
 RATE = 44100              # 44.1kHz sampline rate
-CHUNK = 2048              # buffer size
+CHUNK = 8192              # buffer size
 OUTPUT_FILENAME = 'tmp.wav'
+MAX_SILENT_DURATION = 2.0
 
 # initialize PyAudio and open stream
 audio = pyaudio.PyAudio()
@@ -67,6 +68,16 @@ stream = audio.open(
 # fast whisper model
 whisper = WhisperModel('models/faster-whisper-small', device='cpu', compute_type='int8')
 
+# pyannote segmentation model for VAD
+segmentation = Model.from_pretrained('models/pyannote-segmentation-3/pytorch_model.bin')
+pipeline = VoiceActivityDetection(segmentation=segmentation)
+HYPER_PARAMETERS = {
+    # remove speech regions shorter than that many seconds.
+    'min_duration_on': 0.15,
+    # fill non-speech regions shorter than that many seconds.
+    'min_duration_off': 0.1,
+}
+pipeline.instantiate(HYPER_PARAMETERS)
 
 # initialize GROQ client
 # you can try gemma2, llama3.1, lamma3, mixtral, etc.
@@ -192,33 +203,6 @@ class LLM2TTSThread(threading.Thread):
             self.stream.write(data[i:i+self.chunk_size])
 
 
-def ask_llm():
-    global is_recording
-    if is_recording:
-        is_recording = False
-        time.sleep(0.1)  # wait for recording to stop
-
-    segments, info = whisper.transcribe('tmp.wav', beam_size=5, language='ko')
-    user_input = ''
-    for segment in segments:
-        user_input += segment.text
-    print(f"User input: {user_input}")
-
-    if not user_input.strip() or model_name not in (
-        'gemma-2-2b-it',
-        'llama-3-ko-bllossom-int4',
-        'llama3.1-8b-instant',
-    ):
-        return
-
-    global thread
-    if thread is not None:
-        thread.stop()
-        # thread.join()  # this will block the main thread
-    thread = LLM2TTSThread(user_input, model_name)
-    thread.start()
-
-
 def model_selected(msg, name):
     global model_name
     msg.set(f"Ask to {name}!")
@@ -226,15 +210,29 @@ def model_selected(msg, name):
 
 
 def record_audio():
-    global is_recording
-
     print('Recording started...')
-    is_recording = True
     frames.clear()
+    silent_duration = 0.0
 
-    while is_recording:
+    while True:
         data = stream.read(CHUNK, exception_on_overflow=False)
         frames.append(data)
+
+        waveform = torch.from_numpy(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
+        waveform = waveform.unsqueeze(0)
+
+        vad_result = pipeline({'waveform': waveform, 'sample_rate': RATE})
+
+        print(f"VAD result: {vad_result.get_timeline()}")
+
+        if vad_result.get_timeline():
+            silent_duration = 0.0
+        else:
+            silent_duration += CHUNK / RATE
+
+        if silent_duration >= MAX_SILENT_DURATION:
+            break
+
     print('Recording stopped.')
 
     wf = wave.open(OUTPUT_FILENAME, 'wb')
@@ -243,11 +241,37 @@ def record_audio():
     wf.setframerate(RATE)
     wf.writeframes(b''.join(frames))
     wf.close()
+    return
 
 
-def stop_recording():
-    global is_recording
-    is_recording = False
+def ask_llm(msg):
+    if model_name not in (
+        'gemma-2-2b-it',
+        'llama-3-ko-bllossom-int4',
+        'llama3.1-8b-instant',
+    ):
+        msg.set('Choose model first!')
+        return
+
+    global thread
+    if thread is not None:
+        thread.stop()
+        # thread.join()  # this will block the main thread
+
+    # start recording in a separate thread
+    record_audio()
+
+    segments, info = whisper.transcribe(OUTPUT_FILENAME, beam_size=5, language='ko')
+    user_input = ''
+    for segment in segments:
+        user_input += segment.text
+    print(f"User input: {user_input}")
+
+    if not user_input.strip():
+        return
+
+    thread = LLM2TTSThread(user_input, model_name)
+    thread.start()
 
 
 def main():
@@ -275,15 +299,11 @@ def main():
 
     label = tk.Label(root, textvariable=msg)
     label.grid(row=1, column=0, columnspan=3, pady=10)
-    record_start = tk.Button(
-        root, text='start recording',
-        command=lambda: threading.Thread(target=record_audio).start(),
+    ask_button = tk.Button(
+        root, text='ask to llm',
+        command=lambda: ask_llm(msg),
     )
-    record_stop = tk.Button(root, text='stop recording', command=stop_recording)
-    record_start.grid(row=2, column=1, pady=10)
-    record_stop.grid(row=3, column=1, pady=10)
-    ask_button = tk.Button(root, text='Ask', command=ask_llm)
-    ask_button.grid(row=4, column=0, columnspan=3, padx=10, pady=10)
+    ask_button.grid(row=2, column=1, pady=10)
 
     root.mainloop()
 
