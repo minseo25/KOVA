@@ -8,6 +8,7 @@ import requests
 import sounddevice as sd
 import soundfile as sf
 import torch
+import time
 from dotenv import load_dotenv
 from groq import Groq
 from llama_cpp import Llama
@@ -21,9 +22,7 @@ from pyannote.audio.pipelines import VoiceActivityDetection
 
 from eff_word_net.streams import SimpleMicStream
 from eff_word_net.engine import HotwordDetector
-
 from eff_word_net.audio_processing import Resnet50_Arc_loss
-
 from eff_word_net import samples_loc
 
 
@@ -41,6 +40,7 @@ class VoiceAssistantApp:
         self.client = Groq(api_key=os.getenv('GROQ_API_KEY'))
         self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
         self.recording = False
+        self.freeze_until = 0
         self.model_name = ''
         self.thread = None
         self.setup_audio()
@@ -104,7 +104,7 @@ class VoiceAssistantApp:
             model=base_model,
             reference_file=os.path.join(samples_loc, 'himalbud_ref.json'),
             threshold=0.7,
-            relaxation_time=2,
+            relaxation_time=2,  # hotword 감지 후, 10초동안은 추가 감지 방지
         )
         self.mic_stream = SimpleMicStream(
             window_length_secs=1.5,
@@ -183,6 +183,7 @@ class VoiceAssistantApp:
         wf.close()
 
         self.update_recording_status(False)
+        self.freeze_until = time.time() + 5.0  # freeze hotword detection for 5 seconds
 
     def update_recording_status(self, recording):
         self.recording = recording
@@ -215,7 +216,7 @@ class VoiceAssistantApp:
 
     def detect_hotword(self):
         while True:
-            if self.recording:
+            if self.recording or time.time() < self.freeze_until:
                 continue
 
             frame = self.mic_stream.getFrame()
