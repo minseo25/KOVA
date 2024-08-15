@@ -52,6 +52,7 @@ def record_audio():
     wf.setframerate(RATE)
     wf.writeframes(b''.join(frames))
     wf.close()
+    # task='translate' if you want to translate
     segments, info = model.transcribe(OUTPUT_FILENAME, beam_size=5, language='ko')
     for segment in segments:
         print(f'[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}')
