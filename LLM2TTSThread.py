@@ -22,7 +22,10 @@ SK_APP_KEY = os.getenv('SK_OPEN_API_KEY')
 
 
 class LLM2TTSThread(threading.Thread):
-    def __init__(self, user_input, mime_type, content, chunk_size=1024):
+    def __init__(
+        self, user_input, mime_type, content, chunk_size=1024,
+        start_animation_callback=None, stop_animation_callback=None,
+    ):
         threading.Thread.__init__(self)
         self.user_input = user_input
         self.mime_type = mime_type
@@ -30,15 +33,18 @@ class LLM2TTSThread(threading.Thread):
         self._stop_event = threading.Event()
         self.stream = None
         self.chunk_size = chunk_size
+        self.start_animation_callback = start_animation_callback
+        self.stop_animation_callback = stop_animation_callback
 
     def run(self):
         response = self._run_model_query()
         print('Response:', response)
-        if self._stop_event.is_set():
-            return
-        if not response:
-            response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
-        self._tts_process(response)
+        if not self._stop_event.is_set():
+            if not response:
+                response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
+            self._tts_process(response)
+
+        self.stop_animation_callback()
 
     def stop(self):
         self._stop_event.set()
@@ -46,13 +52,12 @@ class LLM2TTSThread(threading.Thread):
     def _run_model_query(self):
         if self.mime_type == 'image/jpeg':
             print('Ask to VLM')
-            return self._run_llava_onevision(self.content)
+            return self._run_llama3_vision(self.content)
         else:
             print('Ask to LLM')
             return self._run_qwen(self.content)
 
-    def _run_llava_onevision(self, content):
-        # TODO: use local llava-onevision model for inference
+    def _run_llama3_vision(self, content):
         image_data_url = f"data:image/jpeg;base64,{content}"
         try:
             completion = groq_client.chat.completions.create(
@@ -63,7 +68,7 @@ class LLM2TTSThread(threading.Thread):
                         'content': [
                             {
                                 'type': 'text',
-                                'text': '이 사진엔 무엇이 있니? Answer in Korean in 150 characters or less. 한국어로 150자 이내로 답변해줘.',
+                                'text': self.user_input,
                             },
                             {
                                 'type': 'image_url',
@@ -86,17 +91,21 @@ class LLM2TTSThread(threading.Thread):
             print(f"LLM request error: {e}")
             return ''
 
+    def _run_llava_onevision(self, content):
+        # TODO: use local llava-onevision model for inference
+        pass
+
     def _run_qwen(self, content):
         # TODO: use local qwen2.5-1.5B model for inference
         prompt = ''
         if len(content) > 0:
-            prompt += f"앞으로의 질문에 대한 답을 할 때 이 내용을 참고해줘: {content} \n\n자 그러면, "
-        prompt += self.user_input
+            prompt += f"다음은 참고해야 할 정보입니다:\n{content}\n\n"
+        prompt += f"질문: {self.user_input}\n답변:"
 
         try:
             completion = groq_client.chat.completions.create(
                 messages=[
-                    {'role': 'system', 'content': 'You are a helpful korean assistant. 지금부터 너는 한국어로 대답을 할거야'},
+                    {'role': 'system', 'content': '당신은 유용한 한국어 비서입니다. 사용자에게 친절하고 정확하게 대답하세요.'},
                     {'role': 'user', 'content': prompt},
                 ],
                 model='llama-3.1-8b-instant',
@@ -127,6 +136,7 @@ class LLM2TTSThread(threading.Thread):
                 return
 
             # play audio
+            self.start_animation_callback()
             audio_buffer = BytesIO(tts_response.content)
             data, samplerate = sf.read(audio_buffer, dtype='float32')
 
