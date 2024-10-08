@@ -1,7 +1,8 @@
 # MAL-BUD
 
 <p align="center">
-  <img src="./assets/malbud.png" alt="malbud" width="150"/>
+  <!-- insert video -->
+  <video width="200" height="300" controls autoplay><source src="assets/malbud.mp4" type="video/mp4"></video>
 </p>
 
 ### STEP 1. make .env file
@@ -65,8 +66,10 @@ python llm_tts_with_wakeup.py
 두번째 스크립트는 "hi malbud" 이라는 hotword를 인식해 음성 입력을 시작할 수 있습니다.
 
 [update]
-- 챗봇 답변 도중에 끼어들기 기능 구현
-- 클립보드 텍스트 or 이미지 함께 제공 가능
+- wake up trigger ('hi malbud')
+- 챗봇 답변 도중 interrupt 가능
+- 클립보드의 텍스트 or 이미지 함께 제공 가능
+- GUI Effect
 
 [todo]
 - window compatibility 해결
