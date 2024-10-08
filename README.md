@@ -1,9 +1,10 @@
 # MAL-BUD
 
-<p align="center">
-  <!-- insert video -->
-  <video width="200" height="300" controls autoplay><source src="assets/malbud.mp4" type="video/mp4"></video>
-</p>
+
+
+https://github.com/user-attachments/assets/25c947ad-c5b5-41fe-8a93-755d0320a393
+
+
 
 ### STEP 1. make .env file
 ```
