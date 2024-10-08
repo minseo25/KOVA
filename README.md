@@ -44,13 +44,26 @@ chmod +x download_models.sh
 download model from hugging-face (gemma-2-2b, llama-3-int4, qwen2-7b-gguf, faster-whisper)
 
 
-### STEP 3. run LLM - TTS
-```shell
-python llm_tts.py
-```
-
-### STEP 4. install pre-commit before commit
+### STEP 2-3. install pre-commit before commit
 ```shell
 pre-commit install
 pre-commit run --all-files # if you want to check all files
 ```
+
+
+### STEP 3. run end-to-end voice assistant
+```shell
+python llm_tts.py
+python llm_tts_with_wakeup.py
+```
+
+첫번째 스크립트는 "ask" 버튼을 통해 음성으로 인풋을 줄 수 있습니다.
+두번째 스크립트는 "hi malbud" 이라는 hotword를 인식해 음성 입력을 시작할 수 있습니다.
+
+[update]
+- 챗봇 답변 도중에 끼어들기 기능 구현
+- 클립보드 텍스트 or 이미지 함께 제공 가능
+
+[todo]
+- LLM 및 VLM 로컬 모델로 포팅
+- TTS 로컬 모델로 포팅
