@@ -4,3 +4,4 @@
 models/*
 *.wav
 etc/*
+__pycache__
