@@ -1,5 +1,9 @@
 # MAL-BUD
 
+<p align="center">
+  <img src="./assets/malbud.png" alt="malbud" width="150"/>
+</p>
+
 ### STEP 1. make .env file
 ```
 GROQ_API_KEY=<YOUR API KEY>
@@ -41,7 +45,7 @@ windows
 chmod +x download_models.sh
 ./download_models.sh
 ```
-download model from hugging-face (gemma-2-2b, llama-3-int4, qwen2-7b-gguf, faster-whisper)
+download pre-trained segmentation from hugging-face
 
 
 ### STEP 2-3. install pre-commit before commit
@@ -65,5 +69,6 @@ python llm_tts_with_wakeup.py
 - 클립보드 텍스트 or 이미지 함께 제공 가능
 
 [todo]
+- window compatibility 해결
 - LLM 및 VLM 로컬 모델로 포팅
 - TTS 로컬 모델로 포팅
