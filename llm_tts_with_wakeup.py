@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 import sounddevice as sd
 import soundfile as sf
+from PIL import Image, ImageTk
 
 from eff_word_net.streams import SimpleMicStream
 from eff_word_net.engine import HotwordDetector
@@ -39,6 +40,11 @@ freeze_until = 0.0
 msg = None
 label = None
 use_clipboard = None
+gif_frames: list = []
+img_label = None
+root = None
+frame_index = 1
+gif_playing = True
 
 
 def update_recording_status(status):
@@ -73,9 +79,15 @@ def ask_llm():
 
     if use_clipboard.get():
         mime_type, content = get_clipboard_content()
-        thread = LLM2TTSThread(user_input, mime_type, content)
+        thread = LLM2TTSThread(
+            user_input, mime_type, content,
+            start_animation_callback=start_animation, stop_animation_callback=stop_animation,
+        )
     else:
-        thread = LLM2TTSThread(user_input, 'text/plain', '')
+        thread = LLM2TTSThread(
+            user_input, 'text/plain', '',
+            start_animation_callback=start_animation, stop_animation_callback=stop_animation,
+        )
     thread.start()
 
 
@@ -100,13 +112,51 @@ def detect_hotword():
             ask_llm()
 
 
+def start_animation():
+    global gif_playing
+    gif_playing = True
+    update_gif()
+
+
+def stop_animation():
+    global gif_playing
+    gif_playing = False
+
+
+def update_gif():
+    global gif_frames, img_label, frame_index
+    if not gif_playing:
+        return
+
+    frame = gif_frames[frame_index]
+
+    img_label.config(image=frame)
+    img_label.image = frame  # 참조 유지
+
+    frame_index = (frame_index + 1) % len(gif_frames)
+    root.after(15, update_gif)
+
+
 def main():
-    global msg, label, use_clipboard
+    global msg, label, use_clipboard, root, gif_frames, img_label
 
     root = tk.Tk()
     root.title('Ask to MAL-BUD!')
-    img = tk.PhotoImage(file='./assets/robot.png')
-    img_label = tk.Label(root, image=img)
+
+    # load gif frames
+    gif = Image.open('./assets/soundwave.gif')
+
+    for idx in range(gif.n_frames):
+        gif.seek(idx)
+        frame = ImageTk.PhotoImage(gif)
+        gif_frames.append(frame)
+    for idx in range(gif.n_frames - 1, -1, -1):
+        gif.seek(idx)
+        frame = ImageTk.PhotoImage(gif)
+        gif_frames.append(frame)
+
+    # Label for the gif
+    img_label = tk.Label(root, image=gif_frames[0])
     img_label.grid(row=0, column=0, columnspan=3, pady=10, padx=10)
 
     # Label for the checkbox
