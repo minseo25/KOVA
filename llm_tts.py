@@ -61,11 +61,10 @@ HYPER_PARAMETERS = {
     'min_duration_on': 0.15,
     # fill non-speech regions shorter than that many seconds.
     'min_duration_off': 0.05,
-
 }
 pipeline.instantiate(HYPER_PARAMETERS)
 
-# global variables for multithreading
+# global variable for multithreading
 thread = None
 
 # thread class for handling model inference and TTS
@@ -265,6 +264,9 @@ def stt_process():
                 temperature=0.0,
             )
             user_input = transcription.text.strip()
+
+        # remove temporary audio file
+        os.remove(OUTPUT_FILENAME)
 
         return user_input
     except Exception as e:

@@ -11,12 +11,12 @@ import torch
 import time
 from dotenv import load_dotenv
 from groq import Groq
-from llama_cpp import Llama
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from PIL import Image, ImageGrab
+import base64
+import io
 
 import pyaudio
 import wave
-from faster_whisper import WhisperModel
 from pyannote.audio import Model
 from pyannote.audio.pipelines import VoiceActivityDetection
 
@@ -25,327 +25,375 @@ from eff_word_net.engine import HotwordDetector
 from eff_word_net.audio_processing import Resnet50_Arc_loss
 from eff_word_net import samples_loc
 
-
 # for windows (if you have duplicate dll initialization error)
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # load environment variables
 load_dotenv()
 
+# STT and LLM(VLM) : Groq API
+# TODO: use local LLM and VLM models for inference
+groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+# TTS : SK Open API
+SK_APP_KEY = os.getenv('SK_OPEN_API_KEY')
 
-class VoiceAssistantApp:
-    def __init__(self):
-        self.models = self.initialize_models()
-        self.tokenizers = self.initialize_tokenizers()
-        self.client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-        self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
-        self.recording = False
-        self.freeze_until = 0
-        self.model_name = ''
-        self.thread = None
-        self.setup_audio()
-        self.setup_vad()
-        self.setup_hotword_detector()
-        self.setup_gui()
+# record parameters
+FORMAT = pyaudio.paInt16  # 16-bit resolution
+CHANNELS = 1              # mono
+RATE = 44100              # 44.1kHz sampline rate
+CHUNK = 8192              # buffer size
+OUTPUT_FILENAME = 'tmp.wav'
+MAX_SILENT_DURATION = 2.0
 
-    def initialize_models(self):
-        return {
-            'gemma-2-2b-it': AutoModelForCausalLM.from_pretrained(
-                'models/gemma-2-2b-it',
-                device_map='auto',  # allocate model to GPU if available
-                torch_dtype=torch.bfloat16,
-            ),
-            'llama-3-ko-bllossom-int4': Llama(
-                model_path='models/llama-3-korean-bllossom-8b-gguf/llama-3-Korean-Bllossom-8B-Q4_K_M.gguf',
-                n_ctx=512,
-                n_gpu_layers=0,  # Number of model layers to offload to GPU
-            ),
-            'llama3.1-8b-instant': None,
-        }
+# initialize pyaudio object and stream
+audio = pyaudio.PyAudio()
+stream = audio.open(
+    format=FORMAT, channels=CHANNELS,
+    rate=RATE, input=True,
+    frames_per_buffer=CHUNK,
+    input_device_index=None,
+)
 
-    def initialize_tokenizers(self):
-        return {
-            'gemma-2-2b-it': AutoTokenizer.from_pretrained('models/gemma-2-2b-it'),
-            'llama-3-ko-bllossom-int4': AutoTokenizer.from_pretrained('models/llama-3-korean-bllossom-8b-gguf'),
-            'llama3.1-8b-instant': None,
-        }
+# pyannote segmentation model for VAD
+# use segmentation instead of segmentation-3 to set onset and offset hyperparameters
+segmentation = Model.from_pretrained('models/pyannote-segmentation/pytorch_model.bin')
+pipeline = VoiceActivityDetection(segmentation=segmentation)
+HYPER_PARAMETERS = {
+    # mark regions as active(=speech) when probability is higher than onset value
+    'onset': 0.92,
+    # mark regions as inactive(=non-speech) when probability is lower than offset value
+    'offset': 0.92,
+    # remove speech regions shorter than that many seconds.
+    'min_duration_on': 0.15,
+    # fill non-speech regions shorter than that many seconds.
+    'min_duration_off': 0.05,
+}
+pipeline.instantiate(HYPER_PARAMETERS)
 
-    def setup_audio(self):
-        self.frames = []
-        self.FORMAT = pyaudio.paInt16  # 16-bit resolution
-        self.CHANNELS = 1  # mono
-        self.RATE = 44100  # 44.1kHz sampling rate
-        self.CHUNK = 8192  # buffer size
-        self.OUTPUT_FILENAME = 'tmp.wav'
-        self.MAX_SILENT_DURATION = 2.0
+# hotword detection using eff_word_net
+base_model = Resnet50_Arc_loss()
+malbud_hw = HotwordDetector(
+    hotword='himalbud',
+    model=base_model,
+    reference_file=os.path.join(samples_loc, 'himalbud_ref.json'),
+    threshold=0.7,
+    relaxation_time=2,  # hotword 감지 후, 10초동안은 추가 감지 방지
+)
+mic_stream = SimpleMicStream(
+    window_length_secs=1.5,
+    sliding_window_secs=0.75,
+)
+mic_stream.start_stream()
 
-        self.audio = pyaudio.PyAudio()
-        self.stream = self.audio.open(
-            format=self.FORMAT, channels=self.CHANNELS,
-            rate=self.RATE, input=True,
-            frames_per_buffer=self.CHUNK,
-            input_device_index=None,
-        )
+# global variables
+thread = None
+recording = False
+freeze_until = 0.0
+msg = None
+label = None
+use_clipboard = None
 
-    def setup_vad(self):
-        self.whisper = WhisperModel('models/faster-whisper-small', device='cpu', compute_type='int8')
-        segmentation = Model.from_pretrained('models/pyannote-segmentation-3/pytorch_model.bin')
-        self.pipeline = VoiceActivityDetection(segmentation=segmentation)
-        HYPER_PARAMETERS = {
-            'min_duration_on': 0.15,
-            'min_duration_off': 0.1,
-        }
-        self.pipeline.instantiate(HYPER_PARAMETERS)
 
-    def setup_hotword_detector(self):
-        base_model = Resnet50_Arc_loss()
-        self.malbud_hw = HotwordDetector(
-            hotword='himalbud',
-            model=base_model,
-            reference_file=os.path.join(samples_loc, 'himalbud_ref.json'),
-            threshold=0.7,
-            relaxation_time=2,  # hotword 감지 후, 10초동안은 추가 감지 방지
-        )
-        self.mic_stream = SimpleMicStream(
-            window_length_secs=1.5,
-            sliding_window_secs=0.75,
-        )
-        self.mic_stream.start_stream()
+def record_audio():
+    global freeze_until
 
-    def setup_gui(self):
-        self.root = tk.Tk()
-        self.root.title('Enter Message')
+    update_recording_status(True)
+    frames = []
+    silent_duration = 0.0
+    print('Recording started...')
 
-        self.msg = tk.StringVar()
-        self.msg.set('Select a model to ask')
-
-        btn1 = tk.Button(
-            self.root, text='Gemma-2-it',
-            command=lambda: self.model_selected('gemma-2-2b-it'),
-        )
-        btn2 = tk.Button(
-            self.root, text='ko-bllossom-int4',
-            command=lambda: self.model_selected('llama-3-ko-bllossom-int4'),
-        )
-        btn3 = tk.Button(
-            self.root, text='llama3.1-8b',
-            command=lambda: self.model_selected('llama3.1-8b-instant'),
-        )
-        btn1.grid(row=0, column=0, padx=10, pady=10)
-        btn2.grid(row=0, column=1, padx=10, pady=10)
-        btn3.grid(row=0, column=2, padx=10, pady=10)
-
-        self.label = tk.Label(self.root, textvariable=self.msg)
-        self.label.grid(row=1, column=0, columnspan=3, pady=10)
-
-        hotword_thread = threading.Thread(target=self.detect_hotword)
-        hotword_thread.daemon = True
-        hotword_thread.start()
-
-        self.root.mainloop()
-
-    def model_selected(self, name):
-        self.msg.set(f"Ask to {name}!")
-        self.model_name = name
-
-    def record_audio(self):
-        print('Recording started...')
-        self.update_recording_status(True)
-
-        self.frames.clear()
-        silent_duration = 0.0
-
+    try:
         while True:
-            data = self.stream.read(self.CHUNK, exception_on_overflow=False)
-            self.frames.append(data)
-
+            # read audio data from the stream
+            data = stream.read(CHUNK, exception_on_overflow=False)
+            frames.append(data)
+            # convert audio data to torch tensor
             waveform = torch.from_numpy(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
             waveform = waveform.unsqueeze(0)
 
-            vad_result = self.pipeline({'waveform': waveform, 'sample_rate': self.RATE})
-
+            vad_result = pipeline({'waveform': waveform, 'sample_rate': RATE})
             print(f"VAD result: {vad_result.get_timeline()}")
 
+            # reset silent duration if speech detected
             if vad_result.get_timeline():
                 silent_duration = 0.0
             else:
-                silent_duration += self.CHUNK / self.RATE
-
-            if silent_duration >= self.MAX_SILENT_DURATION:
+                silent_duration += CHUNK / RATE
+            # stop recording if silent duration exceeds the threshold
+            if silent_duration >= MAX_SILENT_DURATION:
                 break
-
-        print('Recording completed.')
-        wf = wave.open(self.OUTPUT_FILENAME, 'wb')
-        wf.setnchannels(self.CHANNELS)
-        wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
-        wf.setframerate(self.RATE)
-        wf.writeframes(b''.join(self.frames))
+    except Exception as e:
+        print(f"Recording error: {e}")
+    finally:
+        print('Recording stopped.')
+        # stop the stream and save the audio file
+        wf = wave.open(OUTPUT_FILENAME, 'wb')
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(audio.get_sample_size(FORMAT))
+        wf.setframerate(RATE)
+        wf.writeframes(b''.join(frames))
         wf.close()
 
-        self.update_recording_status(False)
-        self.freeze_until = time.time() + 5.0  # freeze hotword detection for 5 seconds
+        # freeze hotword detection for 5 seconds after recording
+        update_recording_status(False)
+        freeze_until = time.time() + 5.0
 
-    def update_recording_status(self, recording):
-        self.recording = recording
-        if self.recording:
-            self.msg.set('Recording...')
-            self.label.config(fg='red', bg='white')
-        else:
-            self.msg.set('Ready to detect hotword.')
-            self.label.config(fg='black', bg='white')
 
-    def ask_llm(self):
-        if self.model_name not in self.models:
-            self.msg.set('Choose model first!')
-            return
+def update_recording_status(status):
+    global recording
+    recording = status
 
-        if self.thread is not None:
-            self.thread.stop()
+    if recording:
+        msg.set('Recording...')
+        label.config(fg='red')
+    else:
+        msg.set('Ready to detect hotword.')
+        label.config(fg='black')
 
-        self.record_audio()
 
-        segments, _ = self.whisper.transcribe(self.OUTPUT_FILENAME, beam_size=5, language='ko')
-        user_input = ''.join(segment.text for segment in segments).strip()
-        print(f"User input: {user_input}")
+def stt_process():
+    try:
+        with open(OUTPUT_FILENAME, 'rb') as audio_file:
+            audio_bytes = audio_file.read()
 
-        if not user_input:
-            return
+            # use groq API for STT
+            transcription = groq_client.audio.transcriptions.create(
+                file=(OUTPUT_FILENAME, audio_bytes),
+                model='whisper-large-v3',
+                language='ko',
+                temperature=0.0,
+            )
+            user_input = transcription.text.strip()
 
-        self.thread = LLM2TTSThread(user_input, self.model_name, self.models, self.tokenizers, self.device, self.client)
-        self.thread.start()
+        # remove temporary audio file
+        os.remove(OUTPUT_FILENAME)
 
-    def detect_hotword(self):
-        while True:
-            if self.recording or time.time() < self.freeze_until:
-                continue
+        return user_input
+    except Exception as e:
+        print(f"STT process error: {e}")
+        return ''
 
-            frame = self.mic_stream.getFrame()
-            result = self.malbud_hw.scoreFrame(frame)
-            if result is None:
-                continue
 
-            if result['match']:
-                print('Wakeword uttered', result['confidence'])
-                self.ask_llm()
+def get_clipboard_content():
+    image = ImageGrab.grabclipboard()
+    if isinstance(image, Image.Image):
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        buffered = io.BytesIO()
+        image.save(buffered, format='JPEG')
+        img_bytes = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+        return 'image/jpeg', img_bytes
+    else:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            clipboard_content = root.clipboard_get()
+        except Exception:
+            clipboard_content = ''
+        finally:
+            root.destroy()
+
+        return 'text/plain', clipboard_content
+
+
+def ask_llm():
+    global thread, use_clipboard
+    if thread is not None:
+        thread.stop()
+        # thread.join()  # this will block the main thread
+
+    # start recording in a separate thread
+    record_audio()
+    # STT
+    user_input = stt_process()
+
+    if len(user_input) == 0:
+        return
+
+    if use_clipboard.get():
+        mime_type, content = get_clipboard_content()
+        thread = LLM2TTSThread(user_input, mime_type, content)
+    else:
+        thread = LLM2TTSThread(user_input, 'text/plain', '')
+    thread.start()
+
+
+def greetings():
+    filename = 'assets/greetings.wav'
+    data, samplerate = sf.read(filename)
+
+    sd.play(data, samplerate)
+    sd.wait()
+
+
+def detect_hotword():
+    global recording, freeze_until
+    while True:
+        if recording or time.time() < freeze_until:
+            continue
+
+        frame = mic_stream.getFrame()
+        result = malbud_hw.scoreFrame(frame)
+        if result is not None and result['match']:
+            print('Hotword detected!', result['confidence'])
+            # call greetings for the very first hotword detection
+            if thread is None:
+                greetings()
+
+            ask_llm()
+
+
+def main():
+    global msg, label, use_clipboard
+
+    root = tk.Tk()
+    root.title('Ask to MAL-BUD!')
+    img = tk.PhotoImage(file='./assets/robot.png')
+    img_label = tk.Label(root, image=img)
+    img_label.grid(row=0, column=0, columnspan=3, pady=10, padx=10)
+
+    # Label for the checkbox
+    clipboard_label = tk.Label(root, text='클립보드 내용도 전송')
+    clipboard_label.grid(row=2, column=1)
+
+    # Checkbox for clipboard content
+    use_clipboard = tk.BooleanVar()  # Holds the state of the checkbox (True/False)
+    clipboard_checkbox = tk.Checkbutton(root, variable=use_clipboard)
+    clipboard_checkbox.grid(row=3, column=1)
+
+    msg = tk.StringVar()
+    msg.set('Ready to detect hotword.')
+    label = tk.Label(root, textvariable=msg)
+    label.grid(row=4, column=0, columnspan=3, pady=10)
+
+    # hotword detection thread
+    hotword_thread = threading.Thread(target=detect_hotword)
+    hotword_thread.daemon = True
+    hotword_thread.start()
+
+    root.mainloop()
 
 
 class LLM2TTSThread(threading.Thread):
-    def __init__(self, user_input, model_name, models, tokenizers, device, client, chunk_size=1024):
+    def __init__(self, user_input, mime_type, content, chunk_size=1024):
         threading.Thread.__init__(self)
         self.user_input = user_input
-        self.model_name = model_name
-        self.models = models
-        self.tokenizers = tokenizers
-        self.device = device
-        self.client = client
-        self.chunk_size = chunk_size
+        self.mime_type = mime_type
+        self.content = content
         self._stop_event = threading.Event()
         self.stream = None
+        self.chunk_size = chunk_size
 
     def run(self):
-        try:
-            response = self._run_model_query()
-            print('Response:', response)
-            if self._stop_event.is_set():
-                return
-            if not response:
-                response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
-            self._play_tts_response(response)
-        except Exception as e:
-            print(f"Exception in thread: {e}")
+        response = self._run_model_query()
+        print('Response:', response)
+        if self._stop_event.is_set():
+            return
+        if not response:
+            response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
+        self._tts_process(response)
 
     def stop(self):
         self._stop_event.set()
 
     def _run_model_query(self):
-        if self.model_name == 'gemma-2-2b-it':
-            return self._run_gemma2()
-        elif self.model_name == 'llama-3-ko-bllossom-int4':
-            return self._run_llama3_ko()
-        elif self.model_name == 'llama3.1-8b-instant':
-            return self._run_llama3_1_8b()
+        if self.mime_type == 'image/jpeg':
+            print('Ask to VLM')
+            return self._run_llava_onevision(self.content)
+        else:
+            print('Ask to LLM')
+            return self._run_qwen(self.content)
 
-    def _run_gemma2(self):
-        model = self.models[self.model_name]
-        tokenizer = self.tokenizers[self.model_name]
-        messages = [
-            {'role': 'user', 'content': '안녕 만나서 반가워. 나는 한국어로 너에게 질문할거야. 이모지를 사용하지 말아줘.'},
-            {'role': 'assistant', 'content': '안녕하세요! 저는 한국어로만 답변하는 도우미입니다. 질문을 해주세요.'},
-            {'role': 'user', 'content': self.user_input},
-        ]
-        input_ids = tokenizer.apply_chat_template(
-            messages, return_tensors='pt', return_dict=True,
-        ).to(self.device)
-        outputs = model.generate(**input_ids, max_new_tokens=256)
-        response = tokenizer.decode(
-            outputs[0], skip_special_tokens=True,
-        ).strip()
-        return response.split(self.user_input.strip())[-1].strip() if self.user_input.strip() in response else response
+    def _run_llava_onevision(self, content):
+        # TODO: use local llava-onevision model for inference
+        image_data_url = f"data:image/jpeg;base64,{content}"
+        try:
+            completion = groq_client.chat.completions.create(
+                model='llama-3.2-11b-vision-preview',
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': [
+                            {
+                                'type': 'text',
+                                'text': '이 사진엔 무엇이 있니? Answer in Korean in 150 characters or less. 한국어로 150자 이내로 답변해줘.',
+                            },
+                            {
+                                'type': 'image_url',
+                                'image_url': {
+                                    'url': image_data_url,
+                                },
+                            },
+                        ],
+                    },
+                ],
+                temperature=1.0,
+                max_tokens=150,
+                top_p=1.0,
+                stream=False,
+                stop=None,
+            )
+            llm_response = completion.choices[0].message.content.strip()
+            return llm_response
+        except Exception as e:
+            print(f"LLM request error: {e}")
+            return ''
 
-    def _run_llama3_ko(self):
-        model = self.models[self.model_name]
-        tokenizer = self.tokenizers[self.model_name]
-        PROMPT = \
-            '''당신은 유용한 AI 어시스턴트입니다. 사용자의 질의에 대해 한국어로 친절하고 정확하게 답변해야 합니다.
-        You are a helpful AI assistant, you'll need to answer users' queries in a friendly and accurate manner.'''
-        messages = [
-            {'role': 'system', 'content': PROMPT},
-            {'role': 'user', 'content': self.user_input},
-        ]
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-        generation_kwargs = {
-            'max_tokens': 512,
-            'stop': [''],
-            'top_p': 0.9,
-            'temperature': 0.6,
-            'echo': True,  # Echo the prompt in the output
-        }
-        response_msg = model(prompt, **generation_kwargs)
-        return response_msg['choices'][0]['text'][len(prompt):].strip()
+    def _run_qwen(self, content):
+        # TODO: use local qwen2.5-1.5B model for inference
+        prompt = ''
+        if len(content) > 0:
+            prompt += f"앞으로의 질문에 대한 답을 할 때 이 내용을 참고해줘: {content} \n\n자 그러면, "
+        prompt += self.user_input
 
-    def _run_llama3_1_8b(self):
-        chat_completion = self.client.chat.completions.create(
-            messages=[
-                {'role': 'system', 'content': 'You are a helpful korean assistant. 지금부터 너는 한국어로 대답을 할거야'},
-                {'role': 'user', 'content': self.user_input},
-            ],
-            model='llama-3.1-8b-instant',
-            max_tokens=512,
-        )
-        return chat_completion.choices[0].message.content.strip()
+        try:
+            completion = groq_client.chat.completions.create(
+                messages=[
+                    {'role': 'system', 'content': 'You are a helpful korean assistant. 지금부터 너는 한국어로 대답을 할거야'},
+                    {'role': 'user', 'content': prompt},
+                ],
+                model='llama-3.1-8b-instant',
+                max_tokens=150,
+            )
+            llm_response = completion.choices[0].message.content.strip()
+            return llm_response
+        except Exception as e:
+            print(f"LLM request error: {e}")
+            return ''
 
-    def _play_tts_response(self, response):
-        headers = {
-            'Content-Type': 'application/json',
-            'appKey': os.getenv('SK_OPEN_API_KEY'),
-        }
-        data = {
-            'text': response, 'voice': 'aria',
-            'lang': 'ko-KR', 'speed': '1.0', 'sformat': 'wav',
-        }
-        tts_response = requests.post(
-            'https://apis.openapi.sk.com/tvoice/tts', headers=headers, json=data,
-        )
-
-        if self._stop_event.is_set() or tts_response.status_code != 200:
-            return
-
-        audio_buffer = BytesIO(tts_response.content)
-        data, samplerate = sf.read(audio_buffer)
-        data = data.astype(np.float32)
-        self.stream = sd.OutputStream(
-            samplerate=samplerate, channels=len(data.shape),
-        )
-        self.stream.start()
-
-        for i in range(0, len(data), self.chunk_size):
-            if self._stop_event.is_set():
-                self.stream.abort()
+    def _tts_process(self, response):
+        speakers = ['aria', 'aria_dj', 'jiyoung', 'juwon', 'jihun', 'hamin']
+        try:
+            tts_response = requests.post(
+                'https://apis.openapi.sk.com/tvoice/tts',
+                headers={
+                    'Content-Type': 'application/json',
+                    'appKey': SK_APP_KEY,
+                },
+                json={
+                    'text': response, 'voice': speakers[2],
+                    'lang': 'ko-KR', 'speed': '1.0', 'sformat': 'wav',
+                },
+            )
+            if self._stop_event.is_set() or tts_response.status_code != 200:
+                print('TTS request failed.')
                 return
-            self.stream.write(data[i:i+self.chunk_size])
+
+            # play audio
+            audio_buffer = BytesIO(tts_response.content)
+            data, samplerate = sf.read(audio_buffer, dtype='float32')
+
+            with sd.OutputStream(samplerate=samplerate, channels=len(data.shape)) as stream:
+                stream.write(data)
+                if self._stop_event.is_set():
+                    stream.abort()
+
+        except Exception as e:
+            print(f"TTS process error: {e}")
+            return
 
 
 if __name__ == '__main__':
-    VoiceAssistantApp()
+    main()
