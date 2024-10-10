@@ -30,6 +30,36 @@ groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
 # TODO: use local TTS model for inference
 SK_APP_KEY = os.getenv('SK_OPEN_API_KEY')
 
+global_tokenizer = None
+global_model = None
+global_image_processor = None
+global_max_length = None
+global_device = None
+
+
+def init_kollava_onevision():
+    global global_tokenizer, global_model, global_image_processor, global_max_length, global_device
+
+    warnings.filterwarnings('ignore')
+    pretrained = os.path.join(
+        'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
+        'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v', 'checkpoint-1900',
+    )
+    model_name = 'llava_qwen'
+
+    global_device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+    device_map = 'mps' if global_device == 'mps' else 'auto'
+    print(f"Using device: {global_device} with device map: {device_map}")
+    global_tokenizer, global_model, global_image_processor, global_max_length = load_pretrained_model(
+        pretrained, None, model_name, device_map=device_map, attn_implementation='sdpa',
+    )
+
+    global_model.eval()
+
+
+# initialize kollava_onevision model only once when the script starts
+init_kollava_onevision()
+
 # thread class for handling model inference and TTS
 
 
@@ -47,6 +77,11 @@ class LLM2TTSThread(threading.Thread):
         self.chunk_size = chunk_size
         self.start_animation_callback = start_animation_callback
         self.stop_animation_callback = stop_animation_callback
+        self.device = global_device
+        self.tokenizer = global_tokenizer
+        self.model = global_model
+        self.image_processor = global_image_processor
+        self.max_length = global_max_length
 
     def run(self):
         response = self._run_model_query()
@@ -124,24 +159,10 @@ class LLM2TTSThread(threading.Thread):
         return 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
 
     def _run_llava_onevision(self, content):
-        warnings.filterwarnings('ignore')
-        pretrained = './ckpt/kollava_onevision-google_siglip-so400m-patch14-384-' \
-            'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v/checkpoint-1900'
-        model_name = 'llava_qwen'
-
-        device = self._get_device_map()
-        device_map = 'mps' if device == 'mps' else 'auto'
-        tokenizer, model, image_processor, max_length = load_pretrained_model(
-            # Add any other thing you want to pass in llava_model_args
-            pretrained, None, model_name, device_map=device_map, attn_implementation='sdpa',
-        )
-
-        model.eval()
-
         image_data = base64.b64decode(content)
         image = Image.open(io.BytesIO(image_data))
-        image_tensor = process_images([image], image_processor, model.config)
-        image_tensor = [_image.to(dtype=torch.float16, device=device) for _image in image_tensor]
+        image_tensor = process_images([image], self.image_processor, self.model.config)
+        image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
 
         conv_template = 'qwen_1_5'  # Make sure you use correct chat template for different models
         question = DEFAULT_IMAGE_TOKEN + '\n이미지를 200자 이내로 설명해줘.'
@@ -151,12 +172,12 @@ class LLM2TTSThread(threading.Thread):
         prompt_question = conv.get_prompt()
 
         input_ids = tokenizer_image_token(
-            prompt_question, tokenizer, IMAGE_TOKEN_INDEX,
+            prompt_question, self.tokenizer, IMAGE_TOKEN_INDEX,
             return_tensors='pt',
-        ).unsqueeze(0).to(device)
+        ).unsqueeze(0).to(self.device)
         image_sizes = [image.size]
 
-        cont = model.generate(
+        cont = self.model.generate(
             input_ids,
             images=image_tensor,
             image_sizes=image_sizes,
@@ -164,7 +185,7 @@ class LLM2TTSThread(threading.Thread):
             temperature=0,
             max_new_tokens=200,
         )
-        text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)
+        text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
 
         # delete the incomplete sentence (remove parts after last period)
         response = '.'.join(text_outputs[0].split('.')[:-1]) + '.'
