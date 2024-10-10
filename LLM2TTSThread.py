@@ -2,12 +2,23 @@ import os
 import threading
 import requests
 import webbrowser
+import copy
+import torch
+import warnings
+import base64
+import io
 import sounddevice as sd
 import soundfile as sf
 
 from dotenv import load_dotenv
 from groq import Groq
 from io import BytesIO
+from PIL import Image
+
+from llava.model.builder import load_pretrained_model
+from llava.mm_utils import process_images, tokenizer_image_token
+from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+from llava.conversation import conv_templates
 
 # load environment variables
 load_dotenv()
@@ -68,7 +79,7 @@ class LLM2TTSThread(threading.Thread):
     def _run_model_query(self):
         if self.mime_type == 'image/jpeg':
             print('Ask to VLM')
-            return self._run_llama3_vision(self.content)
+            return self._run_llava_onevision(self.content)
         else:
             print('Ask to LLM')
             return self._run_qwen(self.content)
@@ -109,9 +120,55 @@ class LLM2TTSThread(threading.Thread):
             print(f"LLM request error: {e}")
             return ''
 
+    def _get_device_map(self):
+        return 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+
     def _run_llava_onevision(self, content):
-        # TODO: use local llava-onevision model for inference
-        pass
+        warnings.filterwarnings('ignore')
+        pretrained = './ckpt/kollava_onevision-google_siglip-so400m-patch14-384-' \
+            'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v/checkpoint-1900'
+        model_name = 'llava_qwen'
+
+        device = self._get_device_map()
+        device_map = 'mps' if device == 'mps' else 'auto'
+        tokenizer, model, image_processor, max_length = load_pretrained_model(
+            # Add any other thing you want to pass in llava_model_args
+            pretrained, None, model_name, device_map=device_map, attn_implementation='sdpa',
+        )
+
+        model.eval()
+
+        image_data = base64.b64decode(content)
+        image = Image.open(io.BytesIO(image_data))
+        image_tensor = process_images([image], image_processor, model.config)
+        image_tensor = [_image.to(dtype=torch.float16, device=device) for _image in image_tensor]
+
+        conv_template = 'qwen_1_5'  # Make sure you use correct chat template for different models
+        question = DEFAULT_IMAGE_TOKEN + '\n이미지를 200자 이내로 설명해줘.'
+        conv = copy.deepcopy(conv_templates[conv_template])
+        conv.append_message(conv.roles[0], question)
+        conv.append_message(conv.roles[1], None)
+        prompt_question = conv.get_prompt()
+
+        input_ids = tokenizer_image_token(
+            prompt_question, tokenizer, IMAGE_TOKEN_INDEX,
+            return_tensors='pt',
+        ).unsqueeze(0).to(device)
+        image_sizes = [image.size]
+
+        cont = model.generate(
+            input_ids,
+            images=image_tensor,
+            image_sizes=image_sizes,
+            do_sample=False,
+            temperature=0,
+            max_new_tokens=200,
+        )
+        text_outputs = tokenizer.batch_decode(cont, skip_special_tokens=True)
+
+        # delete the incomplete sentence (remove parts after last period)
+        response = '.'.join(text_outputs[0].split('.')[:-1]) + '.'
+        return response
 
     def _run_qwen(self, content):
         # TODO: use local qwen2.5-1.5B model for inference

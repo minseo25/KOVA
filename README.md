@@ -57,6 +57,12 @@ pre-commit run --all-files # if you want to check all files
 ```
 
 
+### STEP 2-4. download pre-trained ckpt of KoLLava-OneVision
+![Dropbox](assets/dropbox.png)
+
+KoLLava-OneVision의 사전 훈련된 체크포인트는 Dropbox에 업로드되어 있습니다.
+
+
 ### STEP 3. run end-to-end voice assistant
 ```shell
 python llm_tts.py
