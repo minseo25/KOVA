@@ -2,7 +2,6 @@
 .env
 .mypy_cache
 models/*
-*.wav
 etc/*
 ckpt/*
 __pycache__
