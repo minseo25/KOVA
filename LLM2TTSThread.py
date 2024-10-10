@@ -1,6 +1,7 @@
 import os
 import threading
 import requests
+import webbrowser
 import sounddevice as sd
 import soundfile as sf
 
@@ -38,13 +39,28 @@ class LLM2TTSThread(threading.Thread):
 
     def run(self):
         response = self._run_model_query()
-        print('Response:', response)
+
         if not self._stop_event.is_set():
             if not response:
                 response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
+
+            # if response is html
+            if '<!doctype html>' in response.lower():
+                html_response = '<!doctype html>' + response.split('<!doctype html>')[1].split('</html>')[0]
+                self._open_html(html_response)
+                response = '에이치티엠엘 파일을 띄워드리겠습니다'
+
+            print('Response:', response)
             self._tts_process(response)
 
         self.stop_animation_callback()
+
+    def _open_html(self, response):
+        with open('response.html', 'w') as f:
+            f.write(response)
+
+        # open the file in the default web browser
+        webbrowser.open(f'file://{os.path.abspath("response.html")}')
 
     def stop(self):
         self._stop_event.set()
@@ -79,9 +95,11 @@ class LLM2TTSThread(threading.Thread):
                         ],
                     },
                 ],
-                temperature=1.0,
-                max_tokens=150,
-                top_p=1.0,
+                temperature=0.8,
+                max_tokens=200,
+                top_p=0.9,
+                frequency_penalty=0.5,
+                presence_penalty=0.5,
                 stream=False,
                 stop=None,
             )
