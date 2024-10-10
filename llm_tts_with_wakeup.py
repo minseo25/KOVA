@@ -119,8 +119,10 @@ def start_animation():
 
 
 def stop_animation():
-    global gif_playing
+    global gif_playing, frame_index, img_label
     gif_playing = False
+    frame_index = 1
+    img_label.configure(image=gif_frames[0])
 
 
 def update_gif():
