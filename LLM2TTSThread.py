@@ -41,9 +41,13 @@ def init_kollava_onevision():
     global global_tokenizer, global_model, global_image_processor, global_max_length, global_device
 
     warnings.filterwarnings('ignore')
+    # pretrained = os.path.join(
+    #     'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
+    #     'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v', 'checkpoint-1900',
+    # )
     pretrained = os.path.join(
         'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
-        'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v', 'checkpoint-1900',
+        'Qwen_Qwen2.5-3B-Instruct-mlp2x_gelu-finetune-final', 'checkpoint-150',
     )
     model_name = 'llava_qwen'
 
@@ -95,7 +99,9 @@ class LLM2TTSThread(threading.Thread):
                 html_response = '<!doctype html>' + response.split('<!doctype html>')[1].split('</html>')[0]
                 self._open_html(html_response)
                 response = '에이치티엠엘 파일을 띄워드리겠습니다'
-
+            else:
+                # TODO: fine-tune the response to make it more natural (maybe using a light-weight language model)
+                pass
             print('Response:', response)
             self._tts_process(response)
 
@@ -165,7 +171,7 @@ class LLM2TTSThread(threading.Thread):
         image_tensor = [_image.to(dtype=torch.float16, device=self.device) for _image in image_tensor]
 
         conv_template = 'qwen_1_5'  # Make sure you use correct chat template for different models
-        question = DEFAULT_IMAGE_TOKEN + '\n이미지를 200자 이내로 설명해줘.'
+        question = DEFAULT_IMAGE_TOKEN + f'\n{self.user_input}'
         conv = copy.deepcopy(conv_templates[conv_template])
         conv.append_message(conv.roles[0], question)
         conv.append_message(conv.roles[1], None)
@@ -237,9 +243,13 @@ class LLM2TTSThread(threading.Thread):
             data, samplerate = sf.read(audio_buffer, dtype='float32')
 
             with sd.OutputStream(samplerate=samplerate, channels=len(data.shape)) as stream:
-                stream.write(data)
-                if self._stop_event.is_set():
-                    stream.abort()
+                # write audio data in chunks
+                # keep checking if the stop event is set
+                for i in range(0, len(data), self.chunk_size):
+                    if self._stop_event.is_set():
+                        stream.abort()
+                        break
+                    stream.write(data[i:i+self.chunk_size])
 
         except Exception as e:
             print(f"TTS process error: {e}")
