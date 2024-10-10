@@ -44,6 +44,11 @@ class CustomAudioStream:
         self._close_stream()
         self._out_audio = np.zeros(self._window_size)
 
+    def clear_stream(self):
+        self._out_audio = np.zeros(self._window_size)
+        for i in range(RATE//self._sliding_window_size - 1):
+            self.getFrame()
+
     def getFrame(self):
         """
         Returns a 1 sec audio frame with sliding window of 1/8 sec with

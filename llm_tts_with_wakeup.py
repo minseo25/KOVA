@@ -24,8 +24,8 @@ malbud_hw = HotwordDetector(
     hotword='hi_kova',
     model=base_model,
     reference_file=os.path.join(samples_loc, 'hi_kova_ref.json'),
-    threshold=0.6,
-    relaxation_time=2,  # hotword 감지 후, 10초동안은 추가 감지 방지
+    threshold=0.65,
+    relaxation_time=5,  # hotword 감지 후, 5초동안은 추가 감지 방지
 )
 mic_stream = SimpleMicStream(
     window_length_secs=1.5,
@@ -93,7 +93,7 @@ def ask_llm():
 
 
 def detect_hotword():
-    global recording, freeze_until
+    global recording, freeze_until, mic_stream
     while True:
         if recording or time.time() < freeze_until:
             continue
@@ -111,6 +111,7 @@ def detect_hotword():
                 sd.wait()
 
             ask_llm()
+            mic_stream.clear_stream()
 
 
 def start_animation():
@@ -137,7 +138,7 @@ def update_gif():
     img_label.image = frame  # 참조 유지
 
     frame_index = (frame_index + 1) % len(gif_frames)
-    root.after(15, update_gif)
+    root.after(50, update_gif)
 
 
 def main():

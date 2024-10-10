@@ -6,3 +6,5 @@ etc/*
 ckpt/*
 __pycache__/
 **/__pycache__/
+response.html
+tmp.wav
