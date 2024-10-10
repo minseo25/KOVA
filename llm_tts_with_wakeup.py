@@ -21,10 +21,10 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 # hotword detection using eff_word_net
 base_model = Resnet50_Arc_loss()
 malbud_hw = HotwordDetector(
-    hotword='himalbud',
+    hotword='hi_kova',
     model=base_model,
-    reference_file=os.path.join(samples_loc, 'himalbud_ref.json'),
-    threshold=0.7,
+    reference_file=os.path.join(samples_loc, 'hi_kova_ref.json'),
+    threshold=0.6,
     relaxation_time=2,  # hotword 감지 후, 10초동안은 추가 감지 방지
 )
 mic_stream = SimpleMicStream(
@@ -76,6 +76,7 @@ def ask_llm():
 
     if len(user_input) == 0:
         return
+    print('User input:', user_input)
 
     if use_clipboard.get():
         mime_type, content = get_clipboard_content()
