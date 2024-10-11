@@ -1,10 +1,6 @@
-# MAL-BUD
-
-
+# KOVA (Korean-Optimized Vision Assistant)
 
 https://github.com/user-attachments/assets/25c947ad-c5b5-41fe-8a93-755d0320a393
-
-
 
 ### STEP 1. make .env file
 ```
@@ -69,16 +65,19 @@ python llm_tts.py
 python llm_tts_with_wakeup.py
 ```
 
-첫번째 스크립트는 "ask" 버튼을 통해 음성으로 인풋을 줄 수 있습니다.
-두번째 스크립트는 "hi malbud" 이라는 hotword를 인식해 음성 입력을 시작할 수 있습니다.
+- 첫번째 스크립트는 "ask" 버튼을 통해 음성으로 인풋을 줄 수 있습니다.
+- 두번째 스크립트는 "hi KOVA" 이라는 hotword를 인식해 음성 입력을 시작할 수 있습니다.
 
 [update]
-- wake up trigger ('hi malbud')
-- 챗봇 답변 도중 interrupt 가능
-- 클립보드의 텍스트 or 이미지 함께 제공 가능
-- GUI Effect
+
+- [x] wake up trigger ('hi KOVA')
+- [x] 챗봇 답변 도중 interrupt 가능
+- [x] 클립보드의 텍스트 or 이미지 함께 제공 가능
+- [x] GUI Effect
+- [x] VLM 로컬 모델로 포팅
 
 [todo]
-- window compatibility 해결
-- LLM 및 VLM 로컬 모델로 포팅
-- TTS 로컬 모델로 포팅
+
+- [ ] LLM 및 TTS 로컬 모델로 포팅
+- [ ] KoLLaVA-OneVision 추가 학습
+- [ ] wakeup trigger 인식률 개선
