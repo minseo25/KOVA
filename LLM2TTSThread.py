@@ -9,6 +9,7 @@ import base64
 import io
 import sounddevice as sd
 import soundfile as sf
+from bs4 import BeautifulSoup
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -41,18 +42,18 @@ def init_kollava_onevision():
     global global_tokenizer, global_model, global_image_processor, global_max_length, global_device
 
     warnings.filterwarnings('ignore')
-    # pretrained = os.path.join(
-    #     'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
-    #     'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v', 'checkpoint-1900',
-    # )
     pretrained = os.path.join(
         'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
-        'Qwen_Qwen2.5-3B-Instruct-mlp2x_gelu-finetune-final', 'checkpoint-150',
+        'Qwen_Qwen2.5-1.5B-Instruct-mlp2x_gelu-finetune-1.5v', 'checkpoint-1900',
     )
+    # pretrained = os.path.join(
+    #     'ckpt', 'kollava_onevision-google_siglip-so400m-patch14-384-'
+    #     'Qwen_Qwen2.5-3B-Instruct-mlp2x_gelu-finetune-final', 'checkpoint-150',
+    # )
     model_name = 'llava_qwen'
 
     global_device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
-    device_map = 'mps' if global_device == 'mps' else 'auto'
+    device_map = global_device
     print(f"Using device: {global_device} with device map: {device_map}")
     global_tokenizer, global_model, global_image_processor, global_max_length = load_pretrained_model(
         pretrained, None, model_name, device_map=device_map, attn_implementation='sdpa',
@@ -95,9 +96,8 @@ class LLM2TTSThread(threading.Thread):
                 response = '죄송해요, 아직 답변이 불가능한 질문이에요.'
 
             # if response is html
-            if '<!doctype html>' in response.lower():
-                html_response = '<!doctype html>' + response.split('<!doctype html>')[1].split('</html>')[0]
-                self._open_html(html_response)
+            if self._is_html_response(response):
+                self._open_html(response)
                 response = '에이치티엠엘 파일을 띄워드리겠습니다'
             else:
                 # TODO: fine-tune the response to make it more natural (maybe using a light-weight language model)
@@ -148,7 +148,7 @@ class LLM2TTSThread(threading.Thread):
                     },
                 ],
                 temperature=0.8,
-                max_tokens=200,
+                max_tokens=150,
                 top_p=0.9,
                 frequency_penalty=0.5,
                 presence_penalty=0.5,
@@ -163,6 +163,12 @@ class LLM2TTSThread(threading.Thread):
 
     def _get_device_map(self):
         return 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+
+    def _is_html_response(self, response):
+        soup = BeautifulSoup(response, 'html.parser')
+        tags = soup.find_all(True)
+
+        return len(tags) > 0
 
     def _run_llava_onevision(self, content):
         image_data = base64.b64decode(content)
@@ -189,12 +195,13 @@ class LLM2TTSThread(threading.Thread):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            max_new_tokens=200,
+            max_new_tokens=150,
         )
         text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)
 
-        # delete the incomplete sentence (remove parts after last period)
-        response = '.'.join(text_outputs[0].split('.')[:-1]) + '.'
+        response = text_outputs[0]
+        if not self._is_html_response(response):
+            response = '.'.join(response.split('.')[:-1]) + '.'
         return response
 
     def _run_qwen(self, content):
@@ -212,8 +219,14 @@ class LLM2TTSThread(threading.Thread):
                 ],
                 model='llama-3.1-8b-instant',
                 max_tokens=150,
+                temperature=0.8,
+                top_p=0.9,
+                frequency_penalty=0.5,
+                presence_penalty=0.5,
             )
             llm_response = completion.choices[0].message.content.strip()
+            llm_response = '.'.join(llm_response.split('.')[:-1]) + '.'
+
             return llm_response
         except Exception as e:
             print(f"LLM request error: {e}")
