@@ -1,6 +1,9 @@
 # KOVA (Korean-Optimized Vision Assistant)
 
-https://github.com/user-attachments/assets/25c947ad-c5b5-41fe-8a93-755d0320a393
+
+https://github.com/user-attachments/assets/fd5353a4-1b1e-48df-a5df-391f4437b60e
+
+
 
 ### STEP 1. make .env file
 ```
